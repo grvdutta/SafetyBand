@@ -1,6 +1,8 @@
 package com.secret6.safeband
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import android.bluetooth.BluetoothDevice
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -8,7 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
-class AlertViewModel : ViewModel() {
+class AlertViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _alertState = MutableStateFlow<AlertState>(AlertState.Idle)
     val alertState: StateFlow<AlertState> = _alertState.asStateFlow()
@@ -19,10 +21,38 @@ class AlertViewModel : ViewModel() {
     private val _secondsRemaining = MutableStateFlow(30)
     val secondsRemaining: StateFlow<Int> = _secondsRemaining.asStateFlow()
 
-    private var countdownJob: kotlinx.coroutines.Job? = null
+    private val _discoveredDevices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
+    val discoveredDevices: StateFlow<List<BluetoothDevice>> = _discoveredDevices.asStateFlow()
 
-    // Call this from your BLE layer later when the band signals danger.
-    // For now, your "Simulate Danger" button calls it directly.
+    private val _lastDangerPercentage = MutableStateFlow(0)
+    val lastDangerPercentage: StateFlow<Int> = _lastDangerPercentage.asStateFlow()
+
+    private var countdownJob: kotlinx.coroutines.Job? = null
+    private val pinStore = PinStore(application)
+    private val contactsStore = ContactsStore(application)
+    private val sosDispatcher = SosDispatcher(application)
+
+    private val bleManager = BleManager(
+        context = application,
+        onDangerSignalReceived = { percentage ->
+            // Hardware already decided. No threshold check here — always trigger.
+            _lastDangerPercentage.value = percentage
+            onDangerDetected()
+        },
+        onConnectionStateChange = { connected -> _bandConnected.value = connected },
+        onDeviceFound = { device ->
+            val current = _discoveredDevices.value
+            if (current.none { it.address == device.address }) {
+                _discoveredDevices.value = current + device
+            }
+        }
+    )
+
+    fun startBleScan() = bleManager.startScan()
+    fun stopBleScan() = bleManager.stopScan()
+    fun connectToDevice(device: BluetoothDevice) = bleManager.connect(device)
+
+    // Manual button also calls this directly — percentage stays 0 (no ML confidence behind a manual press)
     fun onDangerDetected() {
         if (_alertState.value != AlertState.Idle) return
         _alertState.value = AlertState.CancellationWindow
@@ -36,27 +66,32 @@ class AlertViewModel : ViewModel() {
                 delay(1000)
                 _secondsRemaining.value -= 1
             }
-            // Countdown hit zero without being cancelled -> send SOS
             triggerSos()
         }
     }
 
-    fun cancelAlert() {
-        countdownJob?.cancel()
-        _alertState.value = AlertState.Idle
+    fun attemptCancelWithPin(enteredPin: String): Boolean {
+        if (!pinStore.hasPin()) return true
+        return if (pinStore.verifyPin(enteredPin)) {
+            countdownJob?.cancel()
+            _alertState.value = AlertState.Idle
+            true
+        } else false
     }
+
+    fun setPin(newPin: String) = pinStore.setPin(newPin)
+    fun addContact(number: String) = contactsStore.addContact(number)
+    fun removeContact(number: String) = contactsStore.removeContact(number)
+    fun getContacts(): List<String> = contactsStore.getContacts()
 
     private fun triggerSos() {
         _alertState.value = AlertState.SosSent
-        // TODO: fetch GPS location and POST to backend here (Step 5 of the roadmap)
+        sosDispatcher.sendSosToContacts(contactsStore.getContacts(), _lastDangerPercentage.value)
     }
 
     fun resetToIdle() {
         countdownJob?.cancel()
         _alertState.value = AlertState.Idle
-    }
-
-    fun setBandConnected(connected: Boolean) {
-        _bandConnected.value = connected
+        _lastDangerPercentage.value = 0
     }
 }
