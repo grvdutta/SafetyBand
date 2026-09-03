@@ -24,8 +24,10 @@ class AlertViewModel(application: Application) : AndroidViewModel(application) {
     private val _discoveredDevices = MutableStateFlow<List<BluetoothDevice>>(emptyList())
     val discoveredDevices: StateFlow<List<BluetoothDevice>> = _discoveredDevices.asStateFlow()
 
-    private val _lastDangerPercentage = MutableStateFlow(0)
-    val lastDangerPercentage: StateFlow<Int> = _lastDangerPercentage.asStateFlow()
+    private val _lastDangerPercentage = MutableStateFlow(0f)
+    val lastDangerPercentage: StateFlow<Float> = _lastDangerPercentage.asStateFlow()
+
+    private val DANGER_THRESHOLD = 20.0f //danger value
 
     private var countdownJob: kotlinx.coroutines.Job? = null
     private val pinStore = PinStore(application)
@@ -35,9 +37,10 @@ class AlertViewModel(application: Application) : AndroidViewModel(application) {
     private val bleManager = BleManager(
         context = application,
         onDangerSignalReceived = { percentage ->
-            // Hardware already decided. No threshold check here — always trigger.
             _lastDangerPercentage.value = percentage
-            onDangerDetected()
+            if (percentage > DANGER_THRESHOLD) {
+                onDangerDetected()
+            }
         },
         onConnectionStateChange = { connected -> _bandConnected.value = connected },
         onDeviceFound = { device ->
@@ -92,6 +95,6 @@ class AlertViewModel(application: Application) : AndroidViewModel(application) {
     fun resetToIdle() {
         countdownJob?.cancel()
         _alertState.value = AlertState.Idle
-        _lastDangerPercentage.value = 0
+        _lastDangerPercentage.value = 0f
     }
 }

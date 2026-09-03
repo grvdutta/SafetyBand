@@ -10,7 +10,7 @@ import java.util.UUID
 
 class BleManager(
     private val context: Context,
-    private val onDangerSignalReceived: (percentage: Int) -> Unit,
+    private val onDangerSignalReceived: (percentage: Float) -> Unit,   // now Float, not Int
     private val onConnectionStateChange: (Boolean) -> Unit,
     private val onDeviceFound: (BluetoothDevice) -> Unit
 ) {
@@ -75,9 +75,9 @@ class BleManager(
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             if (characteristic.uuid == DANGER_CHARACTERISTIC_UUID) {
                 val value = characteristic.value
-                if (value != null && value.isNotEmpty()) {
-                    // Whatever number arrives, we don't judge it — just pass it along and always trigger.
-                    val percentage = value[0].toInt() and 0xFF
+                if (value != null && value.size >= 4) {
+                    val buffer = java.nio.ByteBuffer.wrap(value).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                    val percentage = buffer.getFloat()
                     onDangerSignalReceived(percentage)
                 }
             }
